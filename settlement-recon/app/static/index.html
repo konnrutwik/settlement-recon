@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Settlement reconciliation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Newsreader:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#1b2a2f;--mute:#5d6e72;--paper:#e9eeed;--card:#fbfcfb;--rule:#c5d0cd;--teal:#1f6f6b;
+--MATCHED:#2f7d4f;--SETTLED_NEXT_MONTH:#2b5fa8;--ROUNDING_VARIANCE:#a8690c;--DUPLICATE_ENTRY:#7a4aa6;--ORPHAN_REFUND:#b3322e;--other:#6b4a3a}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 "IBM Plex Sans",system-ui,sans-serif;font-variant-numeric:tabular-nums}
+h1,h2{font-family:Newsreader,Georgia,serif;font-weight:600;margin:0}h1{font-size:30px}h2{font-size:20px;margin-bottom:10px}
+header,main{max-width:1180px;margin:0 auto;padding:0 20px}header{padding-top:28px}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:18px 0}.bar a{color:var(--teal);padding:8px 0}
+label{font-size:13px;color:var(--mute);display:flex;flex-direction:column;gap:3px}
+input,button{font:inherit;padding:8px 12px;border:1px solid var(--rule);border-radius:4px;background:#fff;color:var(--ink)}
+button{cursor:pointer;background:var(--teal);color:#fff;border-color:var(--teal)}button.sec{background:#fff;color:var(--teal)}
+:focus-visible{outline:3px solid #f0b429;outline-offset:2px}
+section{background:var(--card);border:1px solid var(--rule);padding:18px;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:minmax(0,360px) 1fr;gap:18px}.grid section{margin:0}@media(max-width:860px){.grid{grid-template-columns:1fr}}.grid{margin-bottom:18px}
+dl.tie{margin:0}dl.tie div{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--rule)}
+dl.tie .sum{border-top:3px double var(--ink);border-bottom:0;font-weight:600;margin-top:4px;padding-top:8px}dt{color:var(--mute)}dd{margin:0}
+.ok{color:var(--MATCHED)}.bad{color:var(--ORPHAN_REFUND)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{background:#fff;color:var(--ink);border:1px solid var(--rule);border-left:6px solid var(--c);text-align:left;padding:8px 12px;min-width:150px}
+.chip b{display:block;font-size:20px}.chip small{color:var(--mute)}.chip[aria-pressed=true]{background:var(--ink);color:#fff}.chip[aria-pressed=true] small{color:#cfd9d6}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--rule);white-space:nowrap}th{font-weight:500;color:var(--mute);font-size:13px}
+td.n,th.n{text-align:right}tr.r{cursor:pointer}tr.r:hover,tr.sel{background:#dfe9e6}.st{font-weight:600;color:var(--c)}
+td.d{white-space:normal;min-width:260px;color:var(--mute);font-size:14px}
+pre{background:#14201f;color:#d7e6e2;padding:12px;overflow:auto;font-size:12.5px;max-height:320px;margin:0}
+ul.as{margin:0;padding-left:20px;max-width:90ch}ul.as li{margin-bottom:6px}
+.tools{display:flex;gap:14px;flex-wrap:wrap;align-items:end;margin:10px 0}.tools a{color:var(--teal);padding:8px 0}
+</style></head><body>
+<header><h1 id="title">Settlement reconciliation</h1>
+<p style="color:var(--mute);margin:4px 0 0">Platform ledger against bank settlement files, matched by transaction id.</p>
+<div class="bar"><label>Random seed<input id="seed" type="number" value="42" style="width:110px"></label>
+<button id="regen">Regenerate data and reconcile</button><button id="rerun" class="sec">Re-run reconciliation</button>
+<a href="/api/csv/platform">platform_transactions.csv</a><a href="/api/csv/bank">bank_settlements.csv</a><a href="#assumptions">Assumptions</a></div></header>
+<main>
+<div class="grid"><section><h2>Tie-out</h2><dl class="tie" id="tie"></dl></section>
+<section><h2>Gap types</h2><div class="chips" id="chips"></div></section></div>
+<section><h2>Line items</h2>
+<div class="tools"><label>Search reference<input id="q" placeholder="TXN-ORPH"></label><a id="json" href="#" target="_blank">View filtered JSON</a><span id="count" style="color:var(--mute);padding:8px 0"></span></div>
+<div class="tw"><table><thead><tr><th>Status</th><th>Reference</th><th>Source</th><th>Batch</th><th class="n">Platform</th><th class="n">Bank</th><th class="n">Variance</th><th class="n">Impact</th><th>Why</th></tr></thead><tbody id="rows"></tbody></table></div></section>
+<section id="detail" hidden><h2 id="dt"></h2><pre id="dj"></pre></section>
+<section id="assumptions"><h2>Assumptions</h2><ul class="as" id="as"></ul></section>
+</main>
+<script>
+const NAMES={MATCHED:"Matched",SETTLED_NEXT_MONTH:"Settled next month",ROUNDING_VARIANCE:"Rounding variance",DUPLICATE_ENTRY:"Duplicate entry",ORPHAN_REFUND:"Orphan refund",UNSETTLED:"Unsettled",BANK_ONLY:"Bank only",AMOUNT_MISMATCH:"Amount mismatch",FEE_BREAK:"Fee break"};
+const BASE=["MATCHED","SETTLED_NEXT_MONTH","ROUNDING_VARIANCE","DUPLICATE_ENTRY","ORPHAN_REFUND"];
+const col=g=>`var(--${BASE.includes(g)?g:"other"})`;
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt=m=>{if(m==null)return"";const a=Math.abs(m);return(m<0?"-":"")+"$"+Math.floor(a/100).toLocaleString("en-US")+"."+String(a%100).padStart(2,"0")};
+let R=null,gap="",sel=null;
+async function load(){R=await (await fetch("/api/reconcile")).json();
+ $("title").textContent=new Date(R.month+"-01T00:00:00Z").toLocaleString("en-US",{month:"long",year:"numeric",timeZone:"UTC"})+" settlement reconciliation";
+ $("seed").value=R.seed;
+ const t=R.tie_out,d=t.difference;
+ const L=[["Platform total (duplicates removed)",t.platform_clean],["Less settled next month",-t.less_settled_next_month],["Less unsettled",-t.less_unsettled],["Plus bank-only lines",t.plus_bank_only],["Plus amount mismatches",t.plus_amount_mismatch],["Expected bank total",t.expected_bank],["Actual bank total",t.actual_bank]];
+ $("tie").innerHTML=L.map(([k,v])=>`<div><dt>${k}</dt><dd>${fmt(v)}</dd></div>`).join("")+`<div class="sum"><dt>Difference</dt><dd class="${d?"bad":"ok"}">${fmt(d)}${d?"":" (ties)"}</dd></div><div><dt>Rows removed as duplicates</dt><dd>${R.summary.duplicates_removed}</dd></div>`;
+ const keys=["",...Object.keys(NAMES).filter(k=>R.by_gap[k])];
+ $("chips").innerHTML=keys.map(k=>{const b=k?R.by_gap[k]:{count:R.findings.length};return`<button class="chip" style="--c:${k?col(k):"var(--ink)"}" data-g="${k}" aria-pressed="${k===gap}"><b>${b.count}</b>${k?NAMES[k]:"All items"}${k&&k!=="MATCHED"?`<br><small>Impact ${fmt(b.impact_minor)}</small>`:""}</button>`}).join("");
+ document.querySelectorAll(".chip").forEach(b=>b.onclick=()=>{gap=b.dataset.g;sel=null;$("detail").hidden=true;document.querySelectorAll(".chip").forEach(c=>c.setAttribute("aria-pressed",c.dataset.g===gap));render()});
+ render()}
+function render(){const q=$("q").value.trim().toLowerCase();
+ const rows=R.findings.filter(f=>(!gap||f.gap_type===gap)&&(!q||f.ref.toLowerCase().includes(q)));
+ $("count").textContent=rows.length+" of "+R.findings.length+" items";
+ $("json").href="/api/reconcile"+(gap?"?gap_type="+gap:"");
+ $("rows").innerHTML=rows.map(f=>`<tr class="r ${f.id===sel?"sel":""}" tabindex="0" data-id="${f.id}"><td class="st" style="--c:${col(f.gap_type)}">${NAMES[f.gap_type]}</td><td>${esc(f.ref)}</td><td>${f.source}</td><td>${esc(f.batch_id)}</td><td class="n">${fmt(f.platform_amount_minor)}</td><td class="n">${fmt(f.bank_amount_minor)}</td><td class="n">${f.variance_minor?fmt(f.variance_minor):""}</td><td class="n">${f.impact_minor?fmt(f.impact_minor):""}</td><td class="d">${esc(f.detail)}</td></tr>`).join("")||`<tr><td colspan=9>No items for this filter. Choose another gap type or clear the search.</td></tr>`;
+ document.querySelectorAll("tr.r").forEach(r=>{const open=()=>{sel=r.dataset.id;const f=R.findings.find(x=>x.id===sel);$("detail").hidden=false;$("dt").textContent=f.ref+": "+NAMES[f.gap_type];$("dj").textContent=JSON.stringify(f.rows,null,2)+"\n\n(all amounts are integer minor units, cents)";render();$("detail").scrollIntoView({behavior:"smooth",block:"nearest"})};r.onclick=open;r.onkeydown=e=>e.key==="Enter"&&open()})}
+$("q").oninput=render;$("rerun").onclick=load;
+$("regen").onclick=async()=>{$("regen").disabled=true;await fetch("/api/generate?seed="+(+$("seed").value||0),{method:"POST"});$("regen").disabled=false;sel=null;$("detail").hidden=true;load()};
+fetch("/api/assumptions").then(r=>r.json()).then(a=>$("as").innerHTML=a.map(x=>`<li>${esc(x)}</li>`).join(""));
+load();
+</script></body></html>
